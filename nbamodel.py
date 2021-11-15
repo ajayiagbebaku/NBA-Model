@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import numpy
 st.set_page_config(page_title="NBA",layout="wide")
-st.header("Today's Predictions 11/14/2021:")
+st.header("Today's Predictions 11/15/2021:")
 st.text("Spread Win/Loss: (37-51).42")
 st.text("Over/Under Win Loss: (39-45).473")
 st.text("Spread HIGH Confidence:")
