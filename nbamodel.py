@@ -2,13 +2,13 @@ import pandas as pd
 import streamlit as st
 import numpy
 st.set_page_config(page_title="NBA",layout="wide")
-st.header("Today's Predictions 11/20/2021:")
-st.text("Spread Win/Loss: (55-73).430")
-st.text("Over/Under Win Loss: (63-68).481")
-st.text("Spread HIGH Confidence:(8-10).444")
-st.text("Spread LOW Confidence:(10-12).455")
-st.text("Totals HIGH Confidence:(10-7).588")
-st.text("Totals LOW Confidence:(10-12).455")
+st.header("Today's Predictions 11/21/2021:")
+st.text("Spread Win/Loss: (59-78).431")
+st.text("Over/Under Win Loss: (66-74).481")
+st.text("Spread HIGH Confidence:(9-11).450")
+st.text("Spread LOW Confidence:(13-16).448")
+st.text("Totals HIGH Confidence:(11-8).579")
+st.text("Totals LOW Confidence:(12-17).414")
 st.text("Please note projections are made around 12pm CST each day")
 df_results = pd.read_excel("UpdatedResults.xlsx")
 
