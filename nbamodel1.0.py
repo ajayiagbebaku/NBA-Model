@@ -1,36 +1,101 @@
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
-# Function to scrape data using BeautifulSoup
-def scrape_data(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        tables = soup.find_all('table')  # Find all tables
-        if tables:
-            return pd.read_html(str(tables[0]))[0]  # Assuming the first table is the correct one
+# Load and preprocess data
+url = 'https://www.nbastuffer.com/2023-2024-nba-team-stats/'
+tables = pd.read_html(url)
+data = pd.concat([tables[0], tables[1]], ignore_index=True)
+
+# Fetch player data
+player_stats_url = 'https://www.teamrankings.com/nba/player-stat/win-score'
+player_data = pd.read_html(player_stats_url)[0]
+player_data = player_data[['Player', 'Team', 'Value']] 
+
+# Print a sample of the player data to verify
+print(player_data.head())
+
+# Rename and clean data
+data.rename(columns={'Team': 'TEAM', 'PPG': 'PPG', 'OPPG': 'oPPG', 'Pace': 'PACE'}, inplace=True)
+data['TEAM'] = data['TEAM'].str.strip().str.replace('*', '', regex=False)
+
+# Combine and average the data
+average_data = data.groupby('TEAM').agg({'PPG': 'mean', 'oPPG': 'mean', 'PACE': 'mean'}).reset_index()
+
+# Model features and target
+X = average_data[['PPG', 'oPPG', 'PACE']]
+y = average_data['PPG']
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train model
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+# Prediction function
+def predict_scores(home_team, away_team, data, model):
+    home_data = data[data['TEAM'] == home_team]
+    away_data = data[data['TEAM'] == away_team]
+    if not home_data.empty and not away_data.empty:
+        home_advantage = 3
+        features_home = home_data[['PPG', 'oPPG', 'PACE']].to_numpy().reshape(1, -1)
+        features_away = away_data[['PPG', 'oPPG', 'PACE']].to_numpy().reshape(1, -1)
+        home_score = model.predict(features_home) + home_advantage
+        away_score = model.predict(features_away)
+        return home_score[0], away_score[0]
+    return None, None
+
+def adjust_for_injuries(team_score, injured_players, player_data):
+    if not injured_players:
+        return team_score  # Return the original score if no players are listed as injured
+    total_injury_impact = 0
+    for player in injured_players:
+        player_row = player_data[player_data['Player'] == player]
+        if not player_row.empty:
+            win_score = player_row['Value'].iloc[0] / 4
+            total_injury_impact += win_score
         else:
-            print("No tables found on the page.")
-            return None
+            print(f"No matching data found for player '{player}'. Check player name.")
+    return team_score - total_injury_impact
+
+
+def calculate_implied_probability(odds):
+    if odds > 0:
+        return 100 / (odds + 100)
     else:
-        print(f"Failed to access {url}")
-        return None
+        return abs(odds) / (abs(odds) + 100)
 
-# URLs
-team_ppg_url = "https://www.teamrankings.com/nba/stat/points-per-game"
-team_opp_ppg_url = "https://www.teamrankings.com/nba/stat/opponent-points-per-game"
-win_scores_url = "https://www.teamrankings.com/nba/player-stat/win-score"
+def make_betting_decision(home_team, away_team, home_injured, away_injured, spread, spread_odds, over_under, over_under_odds, data, model, player_data):
+    home_score_pred, away_score_pred = predict_scores(home_team, away_team, data, model)
+    home_score_pred = adjust_for_injuries(home_score_pred, home_injured, player_data)
+    away_score_pred = adjust_for_injuries(away_score_pred, away_injured, player_data)
 
-# Scrape data
-team_ppg_data = scrape_data(team_ppg_url)
-team_opp_ppg_data = scrape_data(team_opp_ppg_url)
-win_scores_data = scrape_data(win_scores_url)
+    predicted_diff = home_score_pred - away_score_pred
+    predicted_total = home_score_pred + away_score_pred
 
-# Display the first few rows of the data if available
-if team_ppg_data is not None:
-    print(team_ppg_data.head())
-if team_opp_ppg_data is not None:
-    print(team_opp_ppg_data.head())
-if win_scores_data is not None:
-    print(win_scores_data.head())
+    spread_bet = 'Home' if predicted_diff > spread else 'Away'
+    over_under_bet = 'Over' if predicted_total > over_under else 'Under'
+
+    spread_probability = calculate_implied_probability(spread_odds) * 100
+    over_under_probability = calculate_implied_probability(over_under_odds) * 100
+
+    return (f"Projected Scores: {home_team} {home_score_pred:.2f}, {away_team} {away_score_pred:.2f}\n"
+            f"Spread Bet: Bet on the {spread_bet} team (Implied Probability: {spread_probability:.2f}%), "
+            f"Over/Under: Bet {over_under_bet} (Implied Probability: {over_under_probability:.2f}%) "
+            f"(Total predicted: {predicted_total:.2f})")
+
+# Example user input
+home_team = input("Enter the home team: ")
+away_team = input("Enter the away team: ")
+home_injured = input("Enter injured players for home team, separated by commas (if any): ").split(',')
+away_injured = input("Enter injured players for away team, separated by commas (if any): ").split(',')
+spread = float(input("Enter the FanDuel spread for the home team: "))
+spread_odds = float(input("Enter the odds for the spread bet: "))
+over_under = float(input("Enter the FanDuel over/under number for total points: "))
+over_under_odds = float(input("Enter the odds for the over/under bet: "))
+
+
+# Making the betting decisionL
+betting_decision = make_betting_decision(home_team, away_team, home_injured, away_injured, spread, spread_odds, over_under, over_under_odds, average_data, model, player_data)
+print(betting_decision)
