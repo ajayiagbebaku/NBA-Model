@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
+import numpy as np
 
 # Team code to full name mapping
 team_mapping = {
@@ -21,6 +22,15 @@ data.rename(columns={'Team': 'TEAM', 'PPG': 'PPG', 'OPPG': 'oPPG', 'Pace': 'PACE
 data['TEAM'] = data['TEAM'].str.strip().str.replace('*', '', regex=False)
 data['TEAM'] = data['TEAM'].apply(lambda x: team_mapping.get(x, x))
 average_data = data.groupby('TEAM').agg({'PPG': 'mean', 'oPPG': 'mean', 'PACE': 'mean'}).reset_index()
+# Load and preprocess player stats data
+player_stats_url = 'https://www.teamrankings.com/nba/player-stat/win-score'
+player_data = pd.read_html(player_stats_url)[0]
+player_data = player_data[['Player', 'Team', 'Value']]
+player_data['Team'] = player_data['Team'].apply(lambda x: team_mapping.get(x, x))
+
+
+value_threshold = np.percentile(player_data['Value'], 80)  # Define the 80th percentile as star player threshold
+
 
 # Train the model
 X = average_data[['PPG', 'oPPG', 'PACE']]
@@ -29,39 +39,6 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 model = LinearRegression()
 model.fit(X_train, y_train)
 
-# Function to fetch and preprocess player data
-def fetch_player_data():
-    player_stats_url = 'https://www.teamrankings.com/nba/player-stat/win-score'
-    player_data = pd.read_html(player_stats_url)[0]
-    player_data = player_data[['Player', 'Team', 'Value']]  # Keep only relevant columns
-    return player_data
-
-player_data = fetch_player_data()
-print(player_data.head())
-
-# Reverse the team mapping to convert full names to codes
-reverse_team_mapping = {v: k for k, v in team_mapping.items()}
-
-# Adjust team names in player data to match team codes
-def adjust_team_names(player_data, reverse_mapping):
-    player_data['Team'] = player_data['Team'].apply(lambda x: reverse_mapping.get(x, x))
-    return player_data
-
-player_data = adjust_team_names(player_data, reverse_team_mapping)
-print(player_data.head())
-
-def adjust_for_injuries(team_score, injured_players, player_data):
-    total_injury_impact = 0
-    for player in injured_players:
-        player_row = player_data[player_data['Player'] == player]
-        if not player_row.empty:
-            win_score = player_row['Value'].iloc[0] / 4  # Adjust the divisor based on your scoring system
-            total_injury_impact += win_score
-        else:
-            print(f"No matching data found for player '{player}'. Check player name.")
-    return team_score - total_injury_impact
-
-# Example of using injury adjustments in predictions
 def get_injured_players():
     injured_players = {}
     num_teams = int(input("Enter the number of teams with injuries today: "))
@@ -71,14 +48,29 @@ def get_injured_players():
         injured_players[team] = [player.strip() for player in players]
     return injured_players
 
+# Injury adjustments
+def adjust_for_injuries(team_score, injured_players, player_data):
+    total_injury_impact = 0
+    print("Adjusting scores for injuries...")
+    for player in injured_players:
+        player_row = player_data[player_data['Player'] == player]
+        if not player_row.empty:
+            win_score = player_row['Value'].iloc[0]
+            if win_score >= value_threshold:
+                win_score /= 2  # More significant impact for star players
+            else:
+                win_score /= 4
+            print(f"  Injury impact for {player} (win score: {player_row['Value'].iloc[0]}): {win_score}")
+            total_injury_impact += win_score
+        else:
+            print(f"  No matching data found for player '{player}'.")
+    print(f"Total injury impact: {total_injury_impact}")
+    adjusted_score = team_score - total_injury_impact
+    print(f"Adjusted team score: {adjusted_score}")
+    return adjusted_score
 
-# Collect injuries interactively
-injured_players = get_injured_players()  # This will be a dictionary mapping teams to lists of injured players
-
-# You would then use `injured_players` to adjust scores in your game predictions, based on the data you've fetched and processed.
-
-
-def predict_scores(home_team, away_team, data, model, home_team_spread, total_over):
+def predict_scores(home_team, away_team, data, model, home_team_spread, total_over, injured_players):
+    print("\nPredicting scores...")
     home_data = data[data['TEAM'] == home_team]
     away_data = data[data['TEAM'] == away_team]
     if not home_data.empty and not away_data.empty:
@@ -87,34 +79,37 @@ def predict_scores(home_team, away_team, data, model, home_team_spread, total_ov
         features_away = away_data[['PPG', 'oPPG', 'PACE']].to_numpy().reshape(1, -1)
         home_score = model.predict(features_home) + home_advantage
         away_score = model.predict(features_away)
+        print(f"Initial home score (before injury adjustment): {home_score[0]}")
+        print(f"Initial away score (before injury adjustment): {away_score[0]}")
+
+        # Adjust for injuries
+        home_injured_players = injured_players.get(home_team, [])
+        away_injured_players = injured_players.get(away_team, [])
+        home_score = adjust_for_injuries(home_score[0], home_injured_players, player_data)
+        away_score = adjust_for_injuries(away_score[0], away_injured_players, player_data)
+
         total_score = home_score + away_score
-        
-        # Round scores to the nearest whole number
-        home_score = round(home_score[0], 0)
-        away_score = round(away_score[0], 0)
-        total_score = round(total_score[0], 0)
-        
-        # Determine if home team covers the spread
-        if (home_score - away_score) > home_team_spread:
-            spread_result = f"{home_team} covers"
-        else:
-            spread_result = f"{home_team} does not cover"
-        
-        # Determine if the total score is over or under
-        if total_score > total_over:
-            total_result = "Over"
-        else:
-            total_result = "Under"
-        
-        result = {
-            'home_score': home_score,
-            'away_score': away_score,
-            'total_score': total_score,
+
+        # Determine spread and total outcomes
+        spread_result = f"{home_team} covers" if (home_score - away_score) > home_team_spread else f"{home_team} does not cover"
+        total_result = "Over" if total_score > total_over else "Under"
+        print(f"Final predicted home score: {home_score}")
+        print(f"Final predicted away score: {away_score}")
+        print(f"Final total score: {total_score}")
+        print(f"Spread result: {spread_result}")
+        print(f"Total result: {total_result}")
+
+        return {
+            'home_score': round(home_score, 0),
+            'away_score': round(away_score, 0),
+            'total_score': round(total_score, 0),
             'spread_result': spread_result,
             'total_result': total_result
         }
-        return result
     return None
+
+
+# Fetch NBA betting odds and predict outcomes
 def get_nba_betting_odds(game_date):
     url = "https://tank01-fantasy-stats.p.rapidapi.com/getNBABettingOdds"
     querystring = {"gameDate": game_date}
@@ -125,20 +120,20 @@ def get_nba_betting_odds(game_date):
     response = requests.get(url, headers=headers, params=querystring)
     if response.status_code == 200:
         data = response.json()['body']
+        injured_players = get_injured_players()  # Assuming this function collects the latest injury data
         for game_key, game_info in data.items():
             home_team = team_mapping[game_info['homeTeam']]
             away_team = team_mapping[game_info['awayTeam']]
             fanduel_odds = game_info.get('fanduel', {})
             home_team_spread = float(fanduel_odds.get('homeTeamSpread'))
             total_over = float(fanduel_odds.get('totalOver'))
-            result = predict_scores(home_team, away_team, average_data, model, home_team_spread, total_over)
+            result = predict_scores(home_team, away_team, average_data, model, home_team_spread, total_over, injured_players)
             if result:
                 print(f"Game ID: {game_key}")
                 print(f"Away Team: {away_team} - Predicted Score: {result['away_score']}")
                 print(f"Home Team: {home_team} - Predicted Score: {result['home_score']}")
                 print(f"Combined Total Score: {result['total_score']} - Total: {result['total_result']}")
                 print(f"Spread Result: {result['spread_result']}")
-                print("-----")
     else:
         print("Failed to fetch data:", response.status_code)
 
