@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import requests
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
@@ -18,14 +19,27 @@ team_mapping = {
 # Load and preprocess team stats data
 url = 'https://www.nbastuffer.com/2023-2024-nba-team-stats/'
 tables = pd.read_html(url)
-nba_data = pd.concat([tables[0], tables[1]], ignore_index=True)  # Rename to nba_data for clarity
-nba_data.rename(columns={'Team': 'TEAM'}, inplace=True)
-nba_data['TEAM'] = nba_data['TEAM'].str.strip().str.replace('*', '', regex=False)
-nba_data['TEAM'] = nba_data['TEAM'].apply(lambda x: team_mapping.get(x, x))
+regular_season_data = tables[1]
+playoff_data = tables[0]
+
+# Apply team mapping
+regular_season_data['Team'] = regular_season_data['TEAM'].apply(lambda x: team_mapping.get(x.strip(), x))
+playoff_data['Team'] = playoff_data['TEAM'].apply(lambda x: team_mapping.get(x.strip(), x))
+
+# Print column names to verify
+print("Column names in regular season data:", regular_season_data.columns)
+print("Column names in playoff data:", playoff_data.columns)
+
+# Combine and calculate average data
+combined_data = pd.concat([regular_season_data, playoff_data])
+
+# Exclude non-numeric columns before calculating the mean
+numeric_columns = combined_data.select_dtypes(include=[np.number])
+average_data = numeric_columns.groupby(combined_data['TEAM']).mean().reset_index()
 
 # Prepare the data for the model
-X = nba_data[['PPG', 'oPPG', 'PACE']]
-y = nba_data['PPG']
+X = average_data[['PPG', 'oPPG', 'PACE']]
+y = average_data['PPG']
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
@@ -37,23 +51,38 @@ model = LinearRegression()
 model.fit(X_train, y_train)
 
 # Predict function using the model
-def predict_scores(home_team, away_team, nba_data, model, scaler, home_team_spread, total_over):
-    home_data = nba_data[nba_data['TEAM'] == home_team]
-    away_data = nba_data[nba_data['TEAM'] == away_team]
+def predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, total_over):
+    home_data = average_data[average_data['TEAM'] == home_team]
+    away_data = average_data[average_data['TEAM'] == away_team]
     if not home_data.empty and not away_data.empty:
         features_home = scaler.transform(home_data[['PPG', 'oPPG', 'PACE']])
         features_away = scaler.transform(away_data[['PPG', 'oPPG', 'PACE']])
         home_score = model.predict(features_home)
         away_score = model.predict(features_away)
-        return {'Home Score': home_score[0], 'Away Score': away_score[0]}
+        
+        total_score = home_score + away_score
+        over_under = "Over" if total_score > total_over else "Under"
+        spread_result = f"Bet on {home_team}" if (home_score - away_score) < home_team_spread else f"Bet on {away_team}"
+        
+        return {
+            'Home Score': round(home_score[0], 0),
+            'Away Score': round(away_score[0], 0),
+            'Total Score': round(total_score[0], 0),
+            'Spread Result': spread_result,
+            'Over/Under': over_under,
+            'FanDuel Spread': home_team_spread,
+            'FanDuel Total': total_over
+        }
     else:
         return "Data missing for one or both teams."
 
+
+
 def get_nba_betting_odds():
-    today = datetime.now().strftime("%Y%m%d")  # Format the date as YYYYMMDD
+    today = datetime.now().strftime("%Y%m%d")
     url = "https://tank01-fantasy-stats.p.rapidapi.com/getNBABettingOdds"
-    print(today)
-    querystring = {"gameDate": today}
+    print("Querying data for:", today)
+    querystring = {"gameDate": '20240505'}
     headers = {
         "X-RapidAPI-Key": "2d2c1f1b92msh6a8546438f75ab7p18f644jsnfa55639522ed",
         "X-RapidAPI-Host": "tank01-fantasy-stats.p.rapidapi.com"
@@ -62,16 +91,19 @@ def get_nba_betting_odds():
     if response.status_code == 200:
         betting_data = response.json()['body']
         for game_key, game_info in betting_data.items():
-            home_team = team_mapping[game_info['homeTeam']]
-            away_team = team_mapping[game_info['awayTeam']]
+            home_team = team_mapping.get(game_info['homeTeam'], game_info['homeTeam'])
+            away_team = team_mapping.get(game_info['awayTeam'], game_info['awayTeam'])
             fanduel_odds = game_info.get('fanduel', {})
-            home_team_spread = float(fanduel_odds.get('homeTeamSpread', 0))  # Default to 0 if not found
-            total_over = float(fanduel_odds.get('totalOver', 0))  # Default to 0 if not found
-            result = predict_scores(home_team, away_team, nba_data, model, scaler, home_team_spread, total_over)
+            home_team_spread = float(fanduel_odds.get('homeTeamSpread', 0))
+            total_over = float(fanduel_odds.get('totalOver', 0))
+            result = predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, total_over)
             if result:
                 print(f"Game ID: {game_key}")
-                print(f"Away Team: {away_team} - Predicted Score: {result['Away Score']}")
-                print(f"Home Team: {home_team} - Predicted Score: {result['Home Score']}")
+                print(f"Away Team: {away_team}, Predicted Score: {result['Away Score']}")
+                print(f"Home Team: {home_team}, Predicted Score: {result['Home Score']}")
+                print(f"Total Predicted Score: {result['Total Score']}, {result['Over/Under']}")
+                print(f"Suggested Bet: {result['Spread Result']}")
+                print(f"FanDuel Spread: {result['FanDuel Spread']}, FanDuel Total: {result['FanDuel Total']}")
     else:
         print("Failed to fetch data:", response.status_code)
 
