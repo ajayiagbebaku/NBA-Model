@@ -130,5 +130,4 @@ spread = float(input("Enter the FanDuel spread for the home team: "))
 over_under = float(input("Enter the FanDuel over/under number for total points: "))
 
 # Make and display the betting decision
-betting_decision = make_betting_decision(home_team, away_team, home_injured, away_injured, spread, spread_odds, over_under, over_under_odds, average_data, model, player_data)
-print(betting_decision)
+betting_decision = make_betting_decision(home_team, away_team, home_injured, away_injured, spread, over_under, average_data)

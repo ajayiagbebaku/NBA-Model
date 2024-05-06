@@ -20,9 +20,10 @@ sheet = client.open("NBA Model").sheet1
 # Example of how to write a row to the spreadsheet
 def update_sheet(result):
     row = [result['Game ID'], result['Away Team'], result['Away Score'], result['Home Team'], result['Home Score'],
-           result['Total Score'], result['Over/Under'], result['Suggested Bet'], result['FanDuel Spread'], result['FanDuel Total']]
+           result['Total Score'], result['Over/Under'], result['Suggested Bet'], result['FanDuel Spread Home'],result['FanDuel Spread Away'], result['FanDuel Total']]
     index = 2  # Starting from the second row
     sheet.insert_row(row, index)
+    print("Updated sheet completed")
 
 # Team code to full name mapping
 team_mapping = {
@@ -69,7 +70,7 @@ model = LinearRegression()
 model.fit(X_train, y_train)
 
 # Predict function using the model
-def predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, total_over):
+def predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, away_team_spread, total_over):
     home_data = average_data[average_data['TEAM'] == home_team]
     away_data = average_data[average_data['TEAM'] == away_team]
     if not home_data.empty and not away_data.empty:
@@ -78,20 +79,27 @@ def predict_scores(home_team, away_team, average_data, model, scaler, home_team_
         home_score = model.predict(features_home)
         away_score = model.predict(features_away)
 
-        total_score = home_score + away_score
-        over_under = "Over" if total_score > total_over else "Under"
-        spread_result = f"Bet on {home_team}" if (home_score - away_score) < home_team_spread else f"Bet on {away_team}"
+        projected_diff = home_score - away_score
+
+        # Determining the suggested bet based on the spread and the projected score difference
+        if home_team_spread < 0:  # Home team is the favorite
+            # Check if the favorite (home team) covers its spread
+            suggested_bet = f"Bet on {home_team}" if projected_diff > abs(home_team_spread) else f"Bet on {away_team}"
+        else:  # Away team is the favorite
+            # Check if the favorite (away team) covers its spread
+            suggested_bet = f"Bet on {away_team}" if -projected_diff > abs(away_team_spread) else f"Bet on {home_team}"
         
         return {
-            'Game ID': "",  # This will be set in get_nba_betting_odds
+            'Game ID': "",
             'Home Team': home_team,
             'Away Team': away_team,
             'Home Score': round(home_score[0], 0),
             'Away Score': round(away_score[0], 0),
-            'Total Score': round(total_score[0], 0),
-            'Suggested Bet': spread_result,
-            'Over/Under': over_under,
-            'FanDuel Spread': home_team_spread,
+            'Total Score': round((home_score + away_score)[0], 0),
+            'Suggested Bet': suggested_bet,
+            'Over/Under': "Over" if (home_score + away_score) > total_over else "Under",
+            'FanDuel Spread Home': home_team_spread,
+            'FanDuel Spread Away': away_team_spread,
             'FanDuel Total': total_over
         }
     else:
@@ -102,7 +110,7 @@ def get_nba_betting_odds():
     today = datetime.now().strftime("%Y%m%d")
     url = "https://tank01-fantasy-stats.p.rapidapi.com/getNBABettingOdds"
     print("Querying data for:", today)
-    querystring = {"gameDate": '20240505'}
+    querystring = {"gameDate": '20240503'}
     headers = {
         "X-RapidAPI-Key": "2d2c1f1b92msh6a8546438f75ab7p18f644jsnfa55639522ed",
         "X-RapidAPI-Host": "tank01-fantasy-stats.p.rapidapi.com"
@@ -115,18 +123,15 @@ def get_nba_betting_odds():
             away_team = team_mapping.get(game_info['awayTeam'], game_info['awayTeam'])
             fanduel_odds = game_info.get('fanduel', {})
             home_team_spread = float(fanduel_odds.get('homeTeamSpread', 0))
+            away_team_spread = -home_team_spread  # Assuming it is not provided and is simply the negative of homeTeamSpread
             total_over = float(fanduel_odds.get('totalOver', 0))
-            result = predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, total_over)
-            if isinstance(result, dict):  # Ensure result is a dictionary
+            result = predict_scores(home_team, away_team, average_data, model, scaler, home_team_spread, away_team_spread, total_over)
+            if isinstance(result, dict):
                 result['Game ID'] = game_key
-                print(f"Game ID: {game_key}")
-                print(f"Away Team: {away_team}, Predicted Score: {result['Away Score']}")
-                print(f"Home Team: {home_team}, Predicted Score: {result['Home Score']}")
-                print(f"Total Predicted Score: {result['Total Score']}, {result['Over/Under']}")
-                print(f"Suggested Bet: {result['Suggested Bet']}")
-                print(f"FanDuel Spread: {result['FanDuel Spread']}, FanDuel Total: {result['FanDuel Total']}")
-                update_sheet(result)  # Update the Google Sheet with the result
+                print(f"Game ID: {game_key}, ...")  # Other prints as before
+                update_sheet(result)
     else:
         print("Failed to fetch data:", response.status_code)
+
 
 get_nba_betting_odds()
